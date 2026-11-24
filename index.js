@@ -1,95 +1,116 @@
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const fs = require("fs");
+const mongoose = require("mongoose");
 
 const app = express();
-
 app.use(cors());
 app.use(express.json());
 
-// ---- helpers: read and write notes.json ----
-function readNotes() {
-  try {
-    const data = fs.readFileSync("notes.json", "utf-8");
-    return JSON.parse(data);
-  } catch (err) {
-    return []; // file missing or empty
-  }
-}
+// ---- connect to the database ----
+mongoose
+  .connect(process.env.MONGODB_URI)
+  .then(() => console.log("Connected to MongoDB"))
+  .catch((err) => console.log("MongoDB error:", err.message));
 
-function writeNotes(notes) {
-  fs.writeFileSync("notes.json", JSON.stringify(notes, null, 2));
-}
+// ---- what a note looks like ----
+const noteSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  content: { type: String, default: "" },
+});
+
+// MongoDB uses _id. This turns it into "id" so the website still works.
+noteSchema.set("toJSON", {
+  transform: (doc, ret) => {
+    ret.id = ret._id.toString();
+    delete ret._id;
+    delete ret.__v;
+  },
+});
+
+const Note = mongoose.model("Note", noteSchema);
 
 // ---- routes ----
 app.get("/", (req, res) => {
   res.send("Welcome to my Notes server");
 });
 
-app.get("/notes", (req, res) => {
-  res.json(readNotes());
+app.get("/notes", async (req, res) => {
+  try {
+    const notes = await Note.find();
+    res.json(notes);
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
-app.get("/notes/:id", (req, res) => {
-  const id = Number(req.params.id);
-  const note = readNotes().find((n) => n.id === id);
-
-  if (!note) {
-    return res.status(404).json({ error: "Note not found" });
+app.get("/notes/:id", async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(404).json({ error: "Note not found" });
+    }
+    const note = await Note.findById(req.params.id);
+    if (!note) {
+      return res.status(404).json({ error: "Note not found" });
+    }
+    res.json(note);
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
   }
-  res.json(note);
 });
 
-app.post("/notes", (req, res) => {
-  if (!req.body.title) {
-    return res.status(400).json({ error: "Title is required" });
+app.post("/notes", async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.title) {
+      return res.status(400).json({ error: "Title is required" });
+    }
+    const note = await Note.create({
+      title: body.title,
+      content: body.content,
+    });
+    res.status(201).json(note);
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
   }
-
-  const notes = readNotes();
-  const newNote = {
-    id: Date.now(),
-    title: req.body.title,
-    content: req.body.content,
-  };
-
-  notes.push(newNote);
-  writeNotes(notes);
-  res.status(201).json(newNote);
 });
 
-app.put("/notes/:id", (req, res) => {
-  const id = Number(req.params.id);
-  const notes = readNotes();
-  const note = notes.find((n) => n.id === id);
-
-  if (!note) {
-    return res.status(404).json({ error: "Note not found" });
+app.put("/notes/:id", async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(404).json({ error: "Note not found" });
+    }
+    const note = await Note.findByIdAndUpdate(
+      req.params.id,
+      { title: req.body.title, content: req.body.content },
+      { new: true }
+    );
+    if (!note) {
+      return res.status(404).json({ error: "Note not found" });
+    }
+    res.json(note);
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
   }
-
-  if (req.body.title) note.title = req.body.title;
-  if (req.body.content) note.content = req.body.content;
-
-  writeNotes(notes);
-  res.json(note);
 });
 
-app.delete("/notes/:id", (req, res) => {
-  const id = Number(req.params.id);
-  const notes = readNotes();
-  const index = notes.findIndex((n) => n.id === id);
-
-  if (index === -1) {
-    return res.status(404).json({ error: "Note not found" });
+app.delete("/notes/:id", async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(404).json({ error: "Note not found" });
+    }
+    const note = await Note.findByIdAndDelete(req.params.id);
+    if (!note) {
+      return res.status(404).json({ error: "Note not found" });
+    }
+    res.json({ message: "Note deleted" });
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
   }
-
-  notes.splice(index, 1);
-  writeNotes(notes);
-  res.json({ message: "Note deleted" });
 });
 
 // ---- start the server (always at the bottom) ----
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
 });
